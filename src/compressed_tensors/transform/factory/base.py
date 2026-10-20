@@ -92,14 +92,13 @@ class TransformFactory(RegistryMixin, ABC):
         Create transforms and apply them to the model
 
         :param model: module to apply transforms to
-        :param modules: optional module scope to restrict transform application to
+        :param allowed_modules: optional module scope to restrict transform application to
         """
-        module_ids = None if modules is None else {id(module) for module in modules}
         modules_args = [
             (module, arg)
             for arg in self.scheme.apply
             for _, module in match_named_modules(model, arg.targets, arg.ignore)
-            if module_ids is None or id(module) in module_ids
+            if modules is None or module in modules
         ]
 
         desc = f"Applying {self.name} transforms"

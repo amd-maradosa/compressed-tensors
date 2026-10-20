@@ -85,7 +85,7 @@ class TransformFactory(RegistryMixin, ABC):
     def apply_to_model(
         self,
         model: Module,
-        use_tqdm=True,
+        use_tqdm: bool = True,
         modules: Iterable[Module] | None = None,
     ):
         """

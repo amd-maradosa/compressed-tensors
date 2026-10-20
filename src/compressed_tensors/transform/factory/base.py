@@ -92,7 +92,7 @@ class TransformFactory(RegistryMixin, ABC):
         Create transforms and apply them to the model
 
         :param model: module to apply transforms to
-        :param allowed_modules: optional module scope to restrict transform application to
+        :param modules: optional module scope to restrict transform application to
         """
         modules_args = [
             (module, arg)

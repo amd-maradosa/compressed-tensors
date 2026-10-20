@@ -120,6 +120,51 @@ def test_correctness_module_subclasses(type, randomize):
     assert torch.allclose(true_output, output, atol=1e-5, rtol=0.0)
 
 
+def test_apply_transform_config_respects_module_scope():
+    model = torch.nn.Sequential(
+        torch.nn.Linear(4, 4, bias=False),
+        torch.nn.Linear(4, 4, bias=False),
+    )
+    config = TransformConfig(
+        config_groups={
+            "input": TransformScheme(
+                type="hadamard",
+                apply=[TransformArgs(targets="Linear", location="input")],
+            )
+        }
+    )
+
+    apply_transform_config(model, config, modules=[model[0]])
+
+    assert "input_input" in model[0]._modules
+    assert "input_input" not in model[1]._modules
+
+
+def test_apply_transform_config_reuses_factories_across_scopes():
+    model = torch.nn.Sequential(
+        torch.nn.Linear(4, 4, bias=False),
+        torch.nn.Linear(4, 4, bias=False),
+    )
+    config = TransformConfig(
+        config_groups={
+            "input": TransformScheme(
+                type="hadamard",
+                apply=[TransformArgs(targets="Linear", location="input")],
+            )
+        }
+    )
+    factories = {
+        "input": TransformFactory.from_scheme(
+            config.config_groups["input"], name="input"
+        )
+    }
+
+    apply_transform_config(model, config, modules=[model[0]], factories=factories)
+    apply_transform_config(model, config, modules=[model[1]], factories=factories)
+
+    assert model[0].input_input.weight is model[1].input_input.weight
+
+
 @requires_gpu
 @pytest.mark.parametrize("type", ("hadamard", "random-hadamard", "random-matrix"))
 @pytest.mark.parametrize("randomize", (True, False))

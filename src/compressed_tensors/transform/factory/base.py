@@ -94,6 +94,8 @@ class TransformFactory(RegistryMixin, ABC):
         :param model: module to apply transforms to
         :param modules: optional module scope to restrict transform application to
         """
+        # Membership is checked repeatedly across targets and transform arguments.
+        modules = None if modules is None else tuple(modules)
         modules_args = [
             (module, arg)
             for arg in self.scheme.apply

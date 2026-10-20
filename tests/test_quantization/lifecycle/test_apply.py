@@ -135,7 +135,7 @@ def test_apply_quantization_config_tinyllama():
             )
 
 
-def test_apply_quantization_config_respects_allowed_modules():
+def test_apply_quantization_config_respects_module_scope():
     model = torch.nn.Sequential(
         torch.nn.Linear(4, 4),
         torch.nn.Linear(4, 4),
@@ -150,7 +150,7 @@ def test_apply_quantization_config_respects_allowed_modules():
         quantization_status=QuantizationStatus.INITIALIZED,
     )
 
-    apply_quantization_config(model, config, allowed_modules=[model[1]])
+    apply_quantization_config(model, config, modules=[model[1]])
 
     assert not hasattr(model[0], "quantization_scheme")
     assert not hasattr(model[0], "quantization_status")
@@ -543,7 +543,7 @@ def test_apply_kv_cache_skips_non_cache_attention():
     config = QuantizationConfig(config_groups={}, kv_cache_scheme=args)
 
     apply_quantization_config(
-        model, config, allowed_modules=list(model.text_attention.modules())
+        model, config, modules=list(model.text_attention.modules())
     )
 
     assert model.config.decoder is True

@@ -26,7 +26,10 @@ def apply_transform_config(
     :param model: model to apply config to
     :param config: transform config to apply
     :param modules: optional module scope to restrict transform application to
-    :param factories: optional per-group factories reused across scoped applications
+    :param factories: optional factories keyed by config group name. Reuse the same
+        factories across scoped calls to preserve shared matrices, permutations, and
+        RNG state, including paired transforms applied in different scopes. Groups
+        absent from the mapping use a new factory for this call.
     """
     module_scope = None if modules is None else tuple(modules)
     for name, scheme in config.config_groups.items():

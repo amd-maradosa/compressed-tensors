@@ -142,13 +142,11 @@ def apply_quantization_config(
             target_to_scheme[target] = scheme
 
     # mark appropriate layers for quantization by setting their quantization schemes
-    matched_modules = [
-        (name, module)
-        for name, module in match_named_modules(
-            model, target_to_scheme, config.ignore, warn_on_fail=True
+    matched_modules = list(
+        match_named_modules(
+            model, target_to_scheme, config.ignore, warn_on_fail=True, modules=modules
         )
-        if modules is None or module in modules
-    ]
+    )
 
     for name, module in tqdm(
         matched_modules,

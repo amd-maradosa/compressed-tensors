@@ -47,13 +47,23 @@ class TransformFactory(RegistryMixin, ABC):
     :param name: name associated with transform scheme
     :param scheme: transform scheme which defines how transforms should be created
     :param seed: random seed used to transform weight randomization
+    :param cache_device: storage device for shared matrices across applications;
+        defaults to the target module's offload device. Use CPU for factories shared
+        across onloaded subgraphs so they do not retain device tensors between scopes.
     """
 
     transforms: list["TransformBase"]
 
-    def __init__(self, name: str, scheme: TransformScheme, seed: int | None = None):
+    def __init__(
+        self,
+        name: str,
+        scheme: TransformScheme,
+        seed: int | None = None,
+        cache_device: torch.device | str | None = None,
+    ):
         self.name = name
         self.scheme = scheme
+        self.cache_device = None if cache_device is None else torch.device(cache_device)
         self.generator = torch.Generator()
         if seed is not None:
             self.generator.manual_seed(seed)

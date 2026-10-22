@@ -142,6 +142,40 @@ def test_apply_transform_config_respects_module_scope():
     assert "input_input" not in model[1]._modules
 
 
+@pytest.mark.parametrize("type", ["hadamard", "random-hadamard", "random-matrix"])
+@pytest.mark.parametrize(
+    "device",
+    [
+        "cpu",
+        pytest.param(
+            "cuda",
+            marks=pytest.mark.skipif(
+                not torch.cuda.is_available(), reason="requires CUDA"
+            ),
+        ),
+    ],
+)
+def test_factory_cache_stays_on_cpu_when_transform_is_onloaded(type, device):
+    model = torch.nn.Sequential(torch.nn.Linear(8, 8, bias=False).to(device))
+    scheme = TransformScheme(
+        type=type,
+        apply=[
+            TransformArgs(targets="Linear", location="input"),
+            TransformArgs(targets="Linear", location="weight_input", inverse=True),
+        ],
+    )
+    factory = TransformFactory.from_scheme(scheme, name="rotation", cache_device="cpu")
+    inputs = torch.randn(2, 8, device=device)
+    expected = model(inputs)
+    factory.apply_to_model(model, use_tqdm=False)
+
+    assert model[0].rotation_input.weight.device.type == device
+    assert all(weight.device.type == "cpu" for weight in factory.weights.values())
+    if hasattr(factory, "inverses"):
+        assert all(weight.device.type == "cpu" for weight in factory.inverses.values())
+    torch.testing.assert_close(model(inputs), expected)
+
+
 @pytest.mark.parametrize("scope_type", [list, iter])
 def test_factory_module_scope_can_be_reused_across_transform_arguments(scope_type):
     model = torch.nn.Sequential(

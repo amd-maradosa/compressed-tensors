@@ -2,7 +2,6 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import torch
-from compressed_tensors.offload.utils import send_tensors
 from compressed_tensors.transform import TransformArgs, TransformScheme
 from compressed_tensors.transform.factory.base import TransformBase, TransformFactory
 from compressed_tensors.transform.utils.matrix import (
@@ -10,7 +9,7 @@ from compressed_tensors.transform.utils.matrix import (
     get_transform_size,
 )
 from compressed_tensors.utils.helpers import ParameterizedDefaultDict
-from compressed_tensors.utils.offload import get_execution_device, get_offloaded_device
+from compressed_tensors.utils.offload import get_offloaded_device
 from torch import Tensor, device, dtype
 from torch.nn import Module, Parameter
 
@@ -30,9 +29,8 @@ class RandomMatrixFactory(TransformFactory):
         name: str,
         scheme: TransformScheme,
         seed: int | None = None,
-        cache_device: device | str | None = None,
     ):
-        super().__init__(name, scheme, seed, cache_device)
+        super().__init__(name, scheme, seed)
         self.weights = ParameterizedDefaultDict(self._create_weight)
         self.inverses = ParameterizedDefaultDict(self._create_inverse)
 
@@ -45,16 +43,13 @@ class RandomMatrixFactory(TransformFactory):
         :param args: defines how the transform will be applied to the module
         """
         size = get_transform_size(module, args.location, self.scheme.head_dim)
-        device = self.cache_device or get_offloaded_device(module)
+        device = get_offloaded_device(module)
         precision = self.scheme.precision if args.is_online() else torch.float64
 
         factory_kwargs = {"device": device, "precision": precision}
         weight = self.weights.get(size, factory_kwargs=factory_kwargs)
         if args.inverse:
             weight = self.inverses[weight]
-        if self.cache_device is not None:
-            # Materialize the transform without moving the factory's cached tensor.
-            weight = send_tensors(weight, device=get_execution_device(module))
 
         return RandomMatrixTransform(weight, self.scheme, args, type(module))
 

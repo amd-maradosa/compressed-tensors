@@ -2,7 +2,6 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import torch
-from compressed_tensors.offload.utils import send_tensors
 from compressed_tensors.transform import TransformArgs, TransformScheme
 from compressed_tensors.transform.factory.base import TransformBase, TransformFactory
 from compressed_tensors.transform.utils.hadamard import deterministic_hadamard_matrix
@@ -31,9 +30,8 @@ class HadamardFactory(TransformFactory):
         name: str,
         scheme: TransformScheme,
         seed: int | None = None,
-        cache_device: device | str | None = None,
     ):
-        super().__init__(name, scheme, seed, cache_device)
+        super().__init__(name, scheme, seed)
         self.weights = ParameterizedDefaultDict(self._create_weight)
         self.perms = ParameterizedDefaultDict(self._create_permutation)
 
@@ -47,7 +45,7 @@ class HadamardFactory(TransformFactory):
         """
         size = get_transform_size(module, args.location, self.scheme.head_dim)
         exec_device = get_execution_device(module)
-        device = self.cache_device or get_offloaded_device(module)
+        device = get_offloaded_device(module)
         precision = self.scheme.precision if args.is_online() else torch.float64
 
         factory_kwargs = {
@@ -58,10 +56,6 @@ class HadamardFactory(TransformFactory):
         weight = self.weights.get(size, factory_kwargs=factory_kwargs)
         # TODO: permutations should be keyed by fused modules, not weight
         perm = self.perms[weight] if self.scheme.randomize else None
-        if self.cache_device is not None:
-            # Materialize the transform without moving the factory's cached tensors.
-            weight = send_tensors(weight, device=exec_device)
-            perm = send_tensors(perm, device=exec_device)
         return HadamardTransform(weight, perm, self.scheme, args, type(module))
 
     def _create_weight(

@@ -61,29 +61,19 @@ def replace_module_parallel(
         total=num_assigned, desc=desc, position=rank, disable=(desc is None)
     )
 
-    # Disk-backed tensors are shared by all ranks. Defer physical deletion until
-    # every rank has completed the transformations that may still read old files.
-    with DistributedDiskCache.defer_file_deletions():
-        # Step 1 & 2: Decouple and compress on meta for non-processing ranks
-        with disable_onloading():
-            for module in modules:
-                if assigned_rank[module] != dist.get_rank():
-                    to_meta(module)  # 1. remove non-processing rank pointers
-                    apply_fn(
-                        module
-                    )  # 2. compress on meta to match state dict for step 4
+    # Step 1 & 2: Decouple and compress on meta for non-processing ranks
+    with disable_onloading():
+        for module in modules:
+            if assigned_rank[module] != dist.get_rank():
+                to_meta(module)  # 1. remove non-processing rank pointers
+                apply_fn(module)  # 2. compress on meta to match state dict for step 4
 
-        # Step 3: Apply on device for processing rank
-        with as_single_threaded():
-            for module in modules:
-                if assigned_rank[module] == dist.get_rank():
-                    apply_fn(module)  # 3. compress without triggering sync
-                    progress.update(1)
-
-    # All ranks have finished reading old cache files before stale files are removed.
-    dist.barrier()
-    DistributedDiskCache.flush_deferred_file_deletions()
-    dist.barrier()
+    # Step 3: Apply on device for processing rank
+    with as_single_threaded():
+        for module in modules:
+            if assigned_rank[module] == dist.get_rank():
+                apply_fn(module)  # 3. compress without triggering sync
+                progress.update(1)
 
     # Step 4: Recouple - broadcast source offload across ranks
     for module in modules:
@@ -103,3 +93,9 @@ def replace_module_parallel(
             broadcast_obj = [get_direct_state_dict(module)]
             dist.broadcast_object_list(broadcast_obj, src=assigned_rank[module])
             replace_direct_state_dict(module, broadcast_obj[0])
+
+    # All ranks have finished transforming and recoupling modules before queued
+    # cache files are removed.
+    dist.barrier()
+    DistributedDiskCache.flush_deferred_file_deletions()
+    dist.barrier()

@@ -99,13 +99,14 @@ class TransformFactory(RegistryMixin, ABC):
         :param model: module to apply transforms to
         :param modules: optional module scope to restrict transform application to
         """
-        # Membership is checked repeatedly across targets and transform arguments.
+        # Reuse a one-shot scope iterable across transform arguments.
         modules = None if modules is None else tuple(modules)
         modules_args = [
             (module, arg)
             for arg in self.scheme.apply
-            for _, module in match_named_modules(model, arg.targets, arg.ignore)
-            if modules is None or module in modules
+            for _, module in match_named_modules(
+                model, arg.targets, arg.ignore, modules=modules
+            )
         ]
 
         desc = f"Applying {self.name} transforms"

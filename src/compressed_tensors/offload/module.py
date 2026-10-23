@@ -40,8 +40,13 @@ def offload_module(
     module._parameters = cache_cls.from_mapping(
         module._parameters, onload_device, offload_device, **kwargs
     )
+    buffer_kwargs = kwargs.copy()
+    if kwargs.get("streaming_writer") is not None:
+        # Non-persistent buffers are needed while running the model but are not
+        # part of state_dict and therefore must not be written to the checkpoint.
+        buffer_kwargs["nonpersistent_names"] = module._non_persistent_buffers_set
     module._buffers = cache_cls.from_mapping(
-        module._buffers, onload_device, offload_device, **kwargs
+        module._buffers, onload_device, offload_device, **buffer_kwargs
     )
 
     original_forward_func = module.forward.__func__
@@ -180,17 +185,43 @@ def subgraph_onload_modules(
 def subgraph_offload_modules(
     modules: dict[str, torch.nn.Module],
     offload_kwargs: dict[str, dict],
+    streaming_writer=None,
 ):
     """
     Offload a list of modules, using the provided device map and kwargs.
     """
     from compressed_tensors.offload import get_cache_init_kwargs
 
+    to_offload = []
     for name, module in modules.items():
         if name in offload_kwargs:
-            offload_module(module, **offload_kwargs[name])
+            module_offload_kwargs = offload_kwargs[name].copy()
         else:
             # we should consider raising warnings, but observers will
             # clog the output with warnings, so we will skip for now
             module_offload_kwargs = get_cache_init_kwargs(module)
+        if streaming_writer is not None:
+            # Streamed shards are the persistent backing store for model tensors.
+            # Preserve the existing cache directory for non-persistent buffers. If
+            # the previous cache lived on CPU or an accelerator, use a sibling cache
+            # directory so temporary tensors do not land beside the checkpoint.
+            module_offload_kwargs["offload_device"] = "disk"
+            if module_offload_kwargs.get("offload_dir") is None:
+                cache_dir = streaming_writer.output_dir.parent / (
+                    f".{streaming_writer.output_dir.name}-offload"
+                )
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                module_offload_kwargs["offload_dir"] = str(cache_dir)
+            module_offload_kwargs["streaming_writer"] = streaming_writer
+            module_offload_kwargs["module_name"] = name
+        to_offload.append((module, module_offload_kwargs))
+
+    has_streamed_disk = any(
+        "streaming_writer" in module_kwargs for _, module_kwargs in to_offload
+    )
+    batch_context = (
+        streaming_writer.batch() if has_streamed_disk else contextlib.nullcontext()
+    )
+    with batch_context:
+        for module, module_offload_kwargs in to_offload:
             offload_module(module, **module_offload_kwargs)

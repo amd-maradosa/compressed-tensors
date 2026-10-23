@@ -3,7 +3,7 @@
 
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import TYPE_CHECKING, Hashable, Literal, Optional
 
 import torch
 import torch.distributed as dist
@@ -49,6 +49,9 @@ class DiskCache(OffloadCache):
         onload_device: torch.device,
         offload_device: Optional["DeviceLikeType | Literal['disk']"] = None,
         offload_dir: Optional[str] = None,
+        streaming_writer=None,
+        module_name: str | None = None,
+        nonpersistent_names: set[Hashable] | None = None,
     ):
         super().__init__(onload_device, offload_device=offload_device)
         if offload_device is not None:
@@ -61,6 +64,19 @@ class DiskCache(OffloadCache):
             )
         # Resolve relative paths to absolute paths for symlink creation
         self.offload_dir = Path(offload_dir).resolve()
+        self.offload_dir.mkdir(parents=True, exist_ok=True)
+        self.streaming_writer = streaming_writer
+        self.module_name = module_name
+        self.nonpersistent_names = nonpersistent_names or set()
+
+    def offload_named(
+        self, name: Hashable, tensor: torch.Tensor | None
+    ) -> torch.Tensor | None:
+        return self.offload(
+            tensor,
+            weight_name=name,
+            persistent=name not in self.nonpersistent_names,
+        )
 
     @catch_pinned_mem_error
     def stage(
@@ -79,6 +95,7 @@ class DiskCache(OffloadCache):
             return None
 
         weight_info = self.index[offloaded]
+        self._wait_for_write(weight_info["safetensors_file"])
 
         staged = load_disk_tensor_from_offload(
             weight_info, device="cpu", template=offloaded
@@ -110,6 +127,7 @@ class DiskCache(OffloadCache):
             onloaded = send_tensors(offloaded, device=device, copy=False)
         else:
             weight_info = self.index[offloaded]
+            self._wait_for_write(weight_info["safetensors_file"])
             onloaded = load_disk_tensor_from_offload(
                 weight_info, device=device, template=offloaded
             )
@@ -117,7 +135,11 @@ class DiskCache(OffloadCache):
         return onloaded
 
     def offload(
-        self, tensor: torch.Tensor | None, offloaded: Optional[torch.Tensor] = None
+        self,
+        tensor: torch.Tensor | None,
+        offloaded: Optional[torch.Tensor] = None,
+        weight_name: Hashable | None = None,
+        persistent: bool | None = None,
     ) -> torch.Tensor | None:
         """
         Offload a tensor to disk by writing a new safetensors file
@@ -128,6 +150,9 @@ class DiskCache(OffloadCache):
         """
         if tensor is None:
             return None
+
+        if persistent is None:
+            persistent = weight_name not in self.nonpersistent_names
 
         if tensor.device.type == "meta":
             assert tensor in self.index
@@ -142,17 +167,33 @@ class DiskCache(OffloadCache):
                 f"does not match offloaded meta tensor dtype {offloaded.dtype}"
             )
 
-        file_path = self._get_ct_file_path(self.offload_dir, offloaded)
+        if self.streaming_writer is not None and persistent:
+            if self.module_name is None or weight_name is None:
+                raise ValueError(
+                    "Streaming checkpoint offload requires a module name and a "
+                    "local tensor name"
+                )
+            model_weight_name = f"{self.module_name}.{weight_name}".lstrip(".")
+            file_path, weight_name = self.streaming_writer.add_tensor(
+                model_weight_name, tensor
+            )
+        else:
+            file_path = self._get_ct_file_path(self.offload_dir, offloaded)
+            weight_name = "weight"
+
         self.index[offloaded] = {
             "safetensors_file": file_path,
-            "weight_name": "weight",
+            "weight_name": str(weight_name),
             "dtype": str(tensor.dtype).removeprefix("torch."),
         }
 
-        assert self._is_ct_file_path(file_path), f"Attempted to write to {file_path}"
-        # safetensors requires contiguous tensors; compressed/packed weights (e.g.
-        # NVFP4, FP8 block) may be non-contiguous views after compression.
-        save_file({"weight": tensor.contiguous()}, file_path)
+        if self.streaming_writer is None or not persistent:
+            assert self._is_ct_file_path(
+                file_path
+            ), f"Attempted to write to {file_path}"
+            # safetensors requires contiguous tensors; compressed/packed weights (e.g.
+            # NVFP4, FP8 block) may be non-contiguous views after compression.
+            save_file({"weight": tensor.contiguous()}, file_path)
         return offloaded
 
     def __delitem__(self, key: str):
@@ -183,8 +224,20 @@ class DiskCache(OffloadCache):
         assert offloaded in self.index, "Cannot find offload to update"
         weight_info = self.index[offloaded]
         file_path = weight_info["safetensors_file"]
+        self._wait_for_write(file_path)
         weight_name = weight_info["weight_name"]
         dtype = getattr(torch, weight_info["dtype"])
+
+        if self.streaming_writer is not None:
+            # Drop any cached safetensors handle before the writer atomically
+            # replaces this multi-tensor shard.
+            _evict(file_path)
+            self.streaming_writer.update_tensor(
+                file_path,
+                weight_name,
+                data.reshape_as(offloaded).to(dtype=dtype),
+            )
+            return
 
         # create new file if old file was a symlink to a checkpoint file
         if os.path.islink(file_path):
@@ -197,6 +250,10 @@ class DiskCache(OffloadCache):
         # save with data using original weight_name
         assert self._is_ct_file_path(file_path), f"Attempted to write to {file_path}"
         save_file({weight_name: data.reshape_as(offloaded).to(dtype=dtype)}, file_path)
+
+    def _wait_for_write(self, file_path: str) -> None:
+        if self.streaming_writer is not None:
+            self.streaming_writer.wait(file_path)
 
     @classmethod
     def create_checkpoint_symlink(

@@ -679,13 +679,13 @@ def test_apply_model(config, expected_schemes):
 
     for name, module in model.named_modules():
         if name in expected_schemes:
-            assert hasattr(module, "quantization_scheme"), (
-                f"{name} should have quantization_scheme"
-            )
-            assert module.quantization_scheme == expected_schemes[name], (
-                f"{name} has wrong scheme"
-            )
+            assert hasattr(
+                module, "quantization_scheme"
+            ), f"{name} should have quantization_scheme"
+            assert (
+                module.quantization_scheme == expected_schemes[name]
+            ), f"{name} has wrong scheme"
         else:
-            assert not hasattr(module, "quantization_scheme"), (
-                f"{name} should not have quantization_scheme"
-            )
+            assert not hasattr(
+                module, "quantization_scheme"
+            ), f"{name} should not have quantization_scheme"
